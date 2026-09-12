@@ -206,3 +206,35 @@ Resultados completos:
 Los resultados y la base vectorial son artefactos locales excluidos de Git.
 El archivo `*.partial.jsonl` conserva una ejecución interrumpida y no forma parte
 de las métricas anteriores. Las marcas de tiempo de los nombres usan UTC.
+
+## 9. Integración continua y validación de entradas
+
+El proyecto incluye un workflow de GitHub Actions en
+`.github/workflows/ci.yml`. Se ejecuta en cada `push` y `pull_request` usando
+Python 3.12 y realiza estas comprobaciones:
+
+1. Instala el proyecto y sus dependencias de desarrollo.
+2. Ejecuta Ruff sobre `src` y `tests` para detectar errores de calidad del código.
+3. Ejecuta toda la suite automatizada con pytest.
+
+Las versiones de las herramientas de desarrollo están fijadas en
+`pyproject.toml` para que las comprobaciones sean reproducibles:
+
+Para ejecutar localmente las mismas comprobaciones:
+
+```powershell
+python -m pip install -e ".[dev]"
+ruff check src tests
+python -m pytest -q
+```
+
+Las entradas de `/ask` y `/search` se validan mediante `QuestionRequest` en
+`src/turismo_rag/schemas.py`. El sistema rechaza con HTTP 422:
+
+- Preguntas vacías, demasiado cortas o compuestas únicamente por símbolos.
+- Preguntas o categorías que contienen caracteres de control.
+- Valores de `top_k` fuera del rango permitido de 1 a 10.
+- Campos desconocidos que no forman parte del formato de la petición.
+
+Estas reglas se cubren mediante pruebas en `tests/test_rag.py`. La validación
+ocurre antes de acceder a ChromaDB, Ollama o al modelo de generación.
