@@ -10,7 +10,10 @@ de tu equipo. La descarga inicial de dependencias y modelos requiere internet.
 Desde la raíz del proyecto, con Python 3.12 y Ollama instalados:
 
 ```powershell
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-lock.txt
 python -m pip install -e ".[dev]"
 ollama pull embeddinggemma:latest
 ollama pull gemma3:4b
