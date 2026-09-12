@@ -73,6 +73,10 @@ def test_api_validation_and_dependency_error():
         with TestClient(app) as client:
             assert client.post("/ask", json={"question": "   "}).status_code == 422
             assert client.post("/ask", json={"question": "Valencia", "top_k": 11}).status_code == 422
+            assert client.post("/ask", json={"question": "!!!"}).status_code == 422
+            assert client.post("/ask", json={"question": "Valencia\u0001"}).status_code == 422
+            assert client.post("/ask", json={"question": "Valencia", "category": "\u0001"}).status_code == 422
+            assert client.post("/ask", json={"question": "Valencia", "unknown": True}).status_code == 422
             response = client.post("/ask", json={"question": "¿Qué visitar?"})
             assert response.status_code == 503
             assert response.json()["detail"] == "Ollama no disponible"
