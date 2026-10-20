@@ -50,6 +50,39 @@ en lugar de `turismo-rag`, después de instalar el proyecto. Los comandos anteri
 funcionando desde la raíz. La instalación editable permite importar `turismo_rag`
 directamente y refleja tus cambios sin reinstalar.
 
+## Docker
+
+La imagen incluye Ollama, `embeddinggemma:latest`, `gemma3:4b`, los documentos y
+el índice ChromaDB. La construcción descarga los modelos y genera el índice;
+necesita internet y puede tardar bastante. Para ejecutarla localmente:
+
+```powershell
+docker build --platform linux/amd64 -t turismo-rag:demo .
+docker run --rm --name turismo-rag -p 127.0.0.1:8000:8000 turismo-rag:demo
+```
+
+Abre `http://127.0.0.1:8000/health` para verificar Ollama, los modelos y el
+índice, y `http://127.0.0.1:8000/docs` para hacer consultas. No hace falta
+instalar Ollama en el equipo que ejecuta este contenedor.
+
+### Presentación en Render
+
+Conecta el repositorio a un **Web Service** de Render y elige **Docker** como
+runtime. Usa el `Dockerfile` de la raíz, sin comando de inicio personalizado
+ni disco persistente. Configura la comprobación de salud en `/health` y prueba
+un plan con al menos 8 GB de RAM antes de la presentación; el plan gratuito de
+512 MB no alcanza para estos modelos. Render asigna `PORT` y el contenedor
+escucha en ese puerto. La URL pública termina en `.onrender.com`.
+
+Los modelos y el índice están en la imagen, de modo que un reinicio no exige
+descargarlos ni volver a indexar. Cuando cambien los documentos o el modelo de
+embeddings, reconstruye la imagen. Una instancia con 8 GB es un punto de partida,
+no una garantía de velocidad: comprueba una respuesta real con anticipación.
+
+La API no tiene autenticación ni límite de solicitudes. Para una demostración
+pública, comparte la URL solo durante el evento y retira el servicio después.
+El archivo `.env` se excluye de la imagen.
+
 ## API
 
 | Método | Ruta | Uso |
