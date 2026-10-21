@@ -15,6 +15,8 @@ import unicodedata
 
 from .config import BENCHMARK_PATH, Settings, get_settings
 from .indexing import manifest_path
+from .judge import Judge
+from .monitoring import log_event
 from .pipeline import TourismAgent
 from .schemas import QuestionRequest
 
@@ -41,12 +43,14 @@ def question_split(question: str) -> str:
 
 def evaluate(settings: Settings | None = None, *, benchmark: Path = BENCHMARK_PATH,
              limit: int | None = None, generate: bool = False,
-             split: str = "test", seed: int = 42) -> dict:
+             split: str = "test", seed: int = 42, judge: bool = False) -> dict:
     settings = settings or get_settings()
     if limit is not None and limit <= 0:
         raise ValueError("limit debe ser positivo.")
     if split not in ("dev", "test", "all"):
         raise ValueError("split debe ser dev, test o all.")
+    if judge and not generate:
+        raise ValueError("judge requiere generate: el juez evalúa respuestas generadas.")
     with benchmark.open(encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file)
         required = {"pregunta", "respuesta", "contexto", "archivo"}
@@ -66,6 +70,7 @@ def evaluate(settings: Settings | None = None, *, benchmark: Path = BENCHMARK_PA
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     output = settings.evaluation_dir / f"{stamp}_{split}.jsonl"
     agent = TourismAgent(settings)
+    evaluator = Judge(settings) if judge else None
     index_manifest_path = manifest_path(settings)
     index_manifest = (json.loads(index_manifest_path.read_text(encoding="utf-8"))
                       if index_manifest_path.is_file() else None)
@@ -85,6 +90,11 @@ def evaluate(settings: Settings | None = None, *, benchmark: Path = BENCHMARK_PA
                                   token_f1=token_f1(answer.answer, row["respuesta"]),
                                   exact_match=normalize(answer.answer) == normalize(row["respuesta"]),
                                   abstained=not answer.grounded)
+                    if evaluator:
+                        record.update(
+                            faithfulness=evaluator.faithfulness(answer.answer, sources),
+                            correctness=evaluator.correctness(row["pregunta"], answer.answer,
+                                                              row["respuesta"]))
                 else:
                     sources = agent.retriever.search(row["pregunta"])
                 expected = row["archivo"].replace("\\", "/")
@@ -114,12 +124,50 @@ def evaluate(settings: Settings | None = None, *, benchmark: Path = BENCHMARK_PA
         "results_file": str(output),
         "notes": "Hit y MRR miden el archivo fuente, no la suficiencia del fragmento. "
                  "Los errores cuentan como fallos de recuperación. F1 es coincidencia léxica, "
-                 "no verificación factual. Referencias alternativas se evalúan por fila.",
+                 "no verificación factual. Referencias alternativas se evalúan por fila. "
+                 "Las métricas del juez dependen del modelo juez y son aproximadas.",
     }
     if generate:
         summary["mean_token_f1_successful"] = mean(r["token_f1"] for r in successful) if successful else None
         summary["exact_match_successful"] = mean(r["exact_match"] for r in successful) if successful else None
         summary["abstention_rate_successful"] = mean(r["abstained"] for r in successful) if successful else None
+    if judge:
+        summary.update(judge_summary(successful))
+        summary["judge_model"] = evaluator.model_name
     summary_path = output.with_suffix(".summary.json")
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    run = append_run(settings.evaluation_dir / "runs.jsonl", stamp, summary)
+    log_event(settings, "evaluation_run", **run)
     return summary
+
+
+def judge_summary(records: list[dict]) -> dict:
+    """Alucinación sobre respuestas no abstenidas; acierto sobre todas, abstención = 0."""
+    faithful = [r["faithfulness"] for r in records
+                if "hallucinated" in r.get("faithfulness", {})]
+    correct = [r["correctness"] for r in records if "score" in r.get("correctness", {})]
+    errors = sum("judge_error" in r.get(key, {}) for r in records
+                 for key in ("faithfulness", "correctness"))
+    return {
+        "judged_answers": len(faithful),
+        "hallucination_response_rate": mean(f["hallucinated"] for f in faithful) if faithful else None,
+        "mean_claim_hallucination_rate": mean(f["hallucination_rate"] for f in faithful) if faithful else None,
+        "correctness_score": mean(c["score"] for c in correct) if correct else None,
+        "correct_rate": mean(c["verdict"] == "correct" for c in correct) if correct else None,
+        "judge_errors": errors,
+    }
+
+
+RUN_FIELDS = ("split", "total", "errors", "generate", "chat_model", "embedding_model", "top_k",
+              "source_hit_at_k", "mrr_at_k", "mean_token_f1_successful",
+              "abstention_rate_successful", "judge_model", "judged_answers",
+              "hallucination_response_rate", "mean_claim_hallucination_rate",
+              "correctness_score", "correct_rate", "judge_errors", "mean_seconds", "results_file")
+
+
+def append_run(path: Path, stamp: str, summary: dict) -> dict:
+    # Historial de una línea por ejecución para comparar modelos y configuraciones.
+    run = {"run": stamp, **{key: summary[key] for key in RUN_FIELDS if key in summary}}
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(run, ensure_ascii=False) + "\n")
+    return run

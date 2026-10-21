@@ -76,6 +76,7 @@ def test_api_validation_and_dependency_error():
             assert client.post("/ask", json={"question": "!!!"}).status_code == 422
             assert client.post("/ask", json={"question": "Valencia\u0001"}).status_code == 422
             assert client.post("/ask", json={"question": "Valencia", "category": "\u0001"}).status_code == 422
+            assert client.post("/ask", json={"question": "Valencia", "category": "string"}).status_code == 422
             assert client.post("/ask", json={"question": "Valencia", "unknown": True}).status_code == 422
             response = client.post("/ask", json={"question": "¿Qué visitar?"})
             assert response.status_code == 503
@@ -138,9 +139,114 @@ def test_evaluation_never_passes_reference_to_search(tmp_path, monkeypatch):
 
     monkeypatch.setattr(evaluation, "TourismAgent", lambda settings: SimpleNamespace(
         retriever=SimpleNamespace(search=search), close=lambda: None))
-    result = evaluation.evaluate(Settings(evaluation_dir=tmp_path, _env_file=None),
+    result = evaluation.evaluate(Settings(evaluation_dir=tmp_path, log_file=None, _env_file=None),
                                  benchmark=path, split="all")
     assert seen == ["¿Qué visitar?"]
     assert result["source_hit_at_k"] == 1
     assert result["mrr_at_k"] == 1
     assert result["errors"] == 0
+
+
+def fake_judge(*replies):
+    from turismo_rag.judge import Judge
+
+    judge = Judge.__new__(Judge)
+    judge.model_name = "juez"
+    answers = iter(replies)
+    model = SimpleNamespace(invoke=lambda messages: SimpleNamespace(content=next(answers)))
+    judge.faithfulness_model = judge.correctness_model = model
+    return judge
+
+
+def test_judge_faithfulness_counts_unsupported_claims():
+    source = Source(citation=1, id="a", text="Se inauguró en 1928.", source="a.txt",
+                    category="blog", start_char=0, end_char=20, distance=0.2)
+    judge = fake_judge('{"claims": [{"claim": "Abrió en 1928", "supported": true},'
+                       ' {"claim": "Lo diseñó Calatrava", "supported": false}]}', "no es json")
+    result = judge.faithfulness("Abrió en 1928 y lo diseñó Calatrava [1].", [source])
+    assert result["claims"] == 2
+    assert result["hallucination_rate"] == 0.5
+    assert result["unsupported_claims"] == ["Lo diseñó Calatrava"]
+    assert "judge_error" in judge.faithfulness("Otra respuesta [1].", [source])
+    assert judge.faithfulness(ABSTENTION, [source])["skipped"] == "abstention"
+
+
+def test_judge_correctness_and_summary():
+    from turismo_rag.evaluation import judge_summary
+
+    judge = fake_judge('{"verdict": "partial", "reason": "falta la fecha"}', '{"verdict": "quizá"}')
+    assert judge.correctness("¿Cuándo?", "Hace mucho [1].", "En 1928.")["score"] == 0.5
+    assert "judge_error" in judge.correctness("¿Cuándo?", "Hace mucho [1].", "En 1928.")
+    assert judge.correctness("¿Cuándo?", ABSTENTION, "En 1928.")["score"] == 0
+    summary = judge_summary([
+        {"faithfulness": {"hallucinated": True, "hallucination_rate": 0.5},
+         "correctness": {"verdict": "partial", "score": 0.5}},
+        {"faithfulness": {"skipped": "abstention"}, "correctness": {"verdict": "incorrect", "score": 0.0}},
+        {"faithfulness": {"judge_error": "x"}, "correctness": {"judge_error": "x"}},
+    ])
+    assert summary["judged_answers"] == 1
+    assert summary["hallucination_response_rate"] == 1
+    assert summary["correctness_score"] == 0.25
+    assert summary["judge_errors"] == 2
+
+
+def test_evaluation_with_judge_appends_run_history(tmp_path, monkeypatch):
+    import csv
+    import json
+    from turismo_rag import evaluation
+    from turismo_rag.schemas import Answer
+
+    path = tmp_path / "benchmark.csv"
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["pregunta", "respuesta", "contexto", "archivo"])
+        writer.writeheader()
+        writer.writerow({"pregunta": "¿Cuándo abrió?", "respuesta": "En 1928.",
+                         "contexto": "Abrió en 1928.", "archivo": "blog/a.txt"})
+    source = Source(citation=1, id="a", text="Abrió en 1928.", source="blog/a.txt",
+                    category="blog", start_char=0, end_char=14, distance=0.1)
+    answer = Answer(question="¿Cuándo abrió?", answer="En 1928 [1].", sources=[source],
+                    cited_sources=[1], grounded=True, model="m", elapsed_seconds=0.1)
+    monkeypatch.setattr(evaluation, "TourismAgent", lambda settings: SimpleNamespace(
+        ask=lambda request: answer, close=lambda: None))
+    monkeypatch.setattr(evaluation, "Judge", lambda settings: fake_judge(
+        '{"claims": [{"claim": "Abrió en 1928", "supported": true}]}',
+        '{"verdict": "correct", "reason": "coincide"}'))
+    settings = Settings(evaluation_dir=tmp_path, log_file=tmp_path / "app.log", _env_file=None)
+    with pytest.raises(ValueError, match="generate"):
+        evaluation.evaluate(settings, benchmark=path, split="all", judge=True)
+    result = evaluation.evaluate(settings, benchmark=path, split="all", generate=True, judge=True)
+    assert result["hallucination_response_rate"] == 0
+    assert result["correct_rate"] == 1
+    runs = [json.loads(line) for line in (tmp_path / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(runs) == 1
+    assert runs[0]["judge_model"] == "juez"
+    logged = json.loads((tmp_path / "app.log").read_text(encoding="utf-8").splitlines()[-1])
+    assert logged["event"] == "evaluation_run"
+    assert logged["correct_rate"] == 1
+
+
+def test_api_logs_each_answer(tmp_path, monkeypatch):
+    import json
+    from turismo_rag import api
+    from turismo_rag.schemas import Answer
+
+    log_file = tmp_path / "app.log"
+    monkeypatch.setattr(api, "get_settings", lambda: Settings(
+        log_file=log_file, judge_requests=True, _env_file=None))
+    monkeypatch.setattr(api, "get_judge", lambda: fake_judge(
+        '{"claims": [{"claim": "Abrió en 1928", "supported": false}]}'))
+    source = Source(citation=1, id="a", text="Mercado", source="blog/a.txt",
+                    category="blog", start_char=0, end_char=7, distance=0.3)
+    answer = Answer(question="¿Cuándo abrió?", answer="En 1928 [1].", sources=[source],
+                    cited_sources=[1], grounded=True, model="m", elapsed_seconds=0.1)
+    app.dependency_overrides[get_agent] = lambda: SimpleNamespace(ask=lambda request: answer)
+    try:
+        with TestClient(app) as client:
+            assert client.post("/ask", json={"question": "¿Cuándo abrió?"}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+    events = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+    assert [event["event"] for event in events] == ["ask", "ask_judged"]
+    assert events[0]["request_id"] == events[1]["request_id"]
+    assert events[0]["min_distance"] == 0.3
+    assert events[1]["hallucinated"] is True

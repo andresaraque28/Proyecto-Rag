@@ -1,13 +1,21 @@
 """Contratos de entrada y salida de la API."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Carpetas de data/Documentos Fuente; un valor libre filtraba todo y devolvía [].
+Category = Literal["Articulos del blog", "Artículos Wikipedia", "Guias turisticas"]
 
 
 class QuestionRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    model_config = ConfigDict(
+        str_strip_whitespace=True, extra="forbid",
+        json_schema_extra={"examples": [{"question": "¿Qué días y horas está abierto el Mercado Central?"}]},
+    )
     question: str = Field(min_length=3, max_length=2000)
     top_k: int | None = Field(default=None, ge=1, le=10)
-    category: str | None = Field(default=None, min_length=1, max_length=100)
+    category: Category | None = Field(default=None, description="Omítelo para buscar en todo.")
 
     @field_validator("question")
     @classmethod
@@ -16,13 +24,6 @@ class QuestionRequest(BaseModel):
             raise ValueError("La pregunta debe contener letras o números.")
         if any(ord(character) < 32 for character in value):
             raise ValueError("La pregunta contiene caracteres de control no permitidos.")
-        return value
-
-    @field_validator("category")
-    @classmethod
-    def validate_category(cls, value: str | None) -> str | None:
-        if value is not None and any(ord(character) < 32 for character in value):
-            raise ValueError("La categoría contiene caracteres no permitidos.")
         return value
 
 

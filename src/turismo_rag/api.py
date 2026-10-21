@@ -3,19 +3,23 @@
 import logging
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from .config import get_settings
 from .embeddings import ServiceError
 from .indexing import get_collection
+from .judge import Judge
+from .monitoring import log_event, setup_logging
 from .pipeline import TourismAgent
 from .schemas import Answer, QuestionRequest, Source
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging(get_settings())
     yield
     if get_agent.cache_info().currsize:
         get_agent().close()
@@ -30,6 +34,17 @@ logger = logging.getLogger(__name__)
 @lru_cache
 def get_agent() -> TourismAgent:
     return TourismAgent()
+
+
+@lru_cache
+def get_judge() -> Judge:
+    return Judge(get_settings())
+
+
+def judge_answer(request_id: str, answer: Answer) -> None:
+    # Corre tras enviar la respuesta: no añade latencia al usuario.
+    result = get_judge().faithfulness(answer.answer, answer.sources)
+    log_event(get_settings(), "ask_judged", request_id=request_id, **result)
 
 
 @app.exception_handler(ServiceError)
@@ -76,9 +91,24 @@ def health():
 
 @app.post("/search", response_model=list[Source])
 def search(request: QuestionRequest, agent: TourismAgent = Depends(get_agent)):
-    return agent.retriever.search(request.question, request.top_k, request.category)
+    sources = agent.retriever.search(request.question, request.top_k, request.category)
+    log_event(get_settings(), "search", request_id=uuid4().hex, question=request.question,
+              category=request.category, sources=[source.source for source in sources],
+              min_distance=min((source.distance for source in sources), default=None))
+    return sources
 
 
 @app.post("/ask", response_model=Answer)
-def ask(request: QuestionRequest, agent: TourismAgent = Depends(get_agent)):
-    return agent.ask(request)
+def ask(request: QuestionRequest, background: BackgroundTasks,
+        agent: TourismAgent = Depends(get_agent)):
+    answer = agent.ask(request)
+    settings = get_settings()
+    request_id = uuid4().hex
+    log_event(settings, "ask", request_id=request_id, question=answer.question,
+              model=answer.model, grounded=answer.grounded, cited_sources=answer.cited_sources,
+              sources=[source.source for source in answer.sources],
+              min_distance=min((source.distance for source in answer.sources), default=None),
+              elapsed_seconds=answer.elapsed_seconds)
+    if settings.judge_requests and answer.grounded:
+        background.add_task(judge_answer, request_id, answer)
+    return answer

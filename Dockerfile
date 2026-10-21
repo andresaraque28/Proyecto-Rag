@@ -7,6 +7,8 @@ RUN mkdir -p /cpu/usr/bin /cpu/usr/lib/ollama \
 
 # Ubuntu mantiene la misma versión de glibc que el binario oficial de Ollama.
 FROM ubuntu:24.04
+# Modelo de chat; gemma3:1b cabe en instancias pequeñas de Render.
+ARG CHAT_MODEL=gemma3:1b
 COPY --from=ollama-cpu /cpu/usr/bin/ollama /usr/bin/ollama
 COPY --from=ollama-cpu /cpu/usr/lib/ollama/ /usr/lib/ollama/
 
@@ -16,7 +18,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OLLAMA_BASE_URL=http://127.0.0.1:11434 \
     OLLAMA_MODELS=/opt/ollama/models \
     OLLAMA_NUM_PARALLEL=1 \
-    OLLAMA_MAX_LOADED_MODELS=2
+    OLLAMA_MAX_LOADED_MODELS=2 \
+    OLLAMA_KEEP_ALIVE=-1 \
+    CHAT_MODEL=${CHAT_MODEL}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libstdc++6 python3-venv \
@@ -24,18 +28,13 @@ RUN apt-get update \
     && python3 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src/ ./src/
-# La instalación editable mantiene config.py bajo /app/src y resuelve /app/data.
-RUN pip install --no-cache-dir -e .
-
 RUN useradd --create-home --uid 10001 app \
     && mkdir -p /opt/ollama/models \
     && chown -R app:app /opt/ollama
 USER app
 
 # Los modelos quedan en la imagen y no se descargan al arrancar en Render.
+# Van antes del código para que un cambio en src/ no los vuelva a descargar.
 RUN set -eu; \
     ollama serve > /tmp/ollama-build.log 2>&1 & \
     server_pid=$!; \
@@ -45,7 +44,15 @@ RUN set -eu; \
         sleep 1; \
     done; \
     ollama pull embeddinggemma:latest; \
-    ollama pull gemma3:4b
+    ollama pull "$CHAT_MODEL"
+
+USER root
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+# La instalación editable mantiene config.py bajo /app/src y resuelve /app/data.
+RUN pip install --no-cache-dir -e .
+USER app
 
 COPY --chown=app:app data/ ./data/
 RUN mkdir -p data/processed data/vector_store data/evaluation
