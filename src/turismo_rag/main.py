@@ -24,6 +24,8 @@ def main() -> None:
     evaluation.add_argument("--generate", action="store_true", help="También genera y evalúa respuestas")
     evaluation.add_argument("--split", choices=["dev", "test", "all"], default="test")
     evaluation.add_argument("--seed", type=int, default=42)
+    evaluation.add_argument("--judge", action="store_true",
+                            help="Mide alucinación y acierto con un juez LLM (implica --generate)")
     serve = commands.add_parser("serve", help="Inicia la API local")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -39,7 +41,8 @@ def main() -> None:
                 result = agent.ask(QuestionRequest(question=args.question, top_k=args.top_k)).model_dump()
         elif args.command == "evaluate":
             from .evaluation import evaluate
-            result = evaluate(limit=args.limit, generate=args.generate, split=args.split, seed=args.seed)
+            result = evaluate(limit=args.limit, generate=args.generate or args.judge,
+                              split=args.split, seed=args.seed, judge=args.judge)
         else:
             import uvicorn
             uvicorn.run("turismo_rag.api:app", host=args.host, port=args.port)

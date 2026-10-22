@@ -7,4 +7,5 @@ __pycache__/
 data/processed/
 data/vector_store/
 data/evaluation/
+data/logs/
 *.log

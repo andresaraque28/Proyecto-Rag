@@ -113,7 +113,7 @@ h('5. Ollama y los dos modelos')
 p('Ollama es el programa que ejecuta los modelos en tu equipo. El proyecto configura dos trabajos diferentes:')
 table(['Modelo predeterminado', 'Trabajo'], [
     ('embeddinggemma:latest', 'Convierte documentos y preguntas en vectores para la búsqueda por significado.'),
-    ('gemma3:4b', 'Redacta la respuesta usando los fragmentos recuperados.'),
+    ('gemma3:1b', 'Redacta la respuesta usando los fragmentos recuperados.'),
 ], [165,346])
 p('EmbeddingGemma participa al indexar y al buscar. Gemma 3 participa al generar respuestas. LangChain se utiliza en generation.py a través de ChatOllama; las llamadas de embeddings se hacen con httpx.')
 p('Ollama funciona como servicio local separado, normalmente en el puerto 11434. Tu API escucha en el 8000. ChromaDB se usa desde Python con persistencia en disco; esta implementación no exige iniciar un servidor Chroma separado.')
@@ -186,7 +186,7 @@ p('Abre Terminal → Nueva terminal en la raíz del proyecto. Si ya instalaste e
 code('.\\.venv\\Scripts\\Activate.ps1\nturismo-rag serve')
 p('La primera activa el entorno Python del proyecto. La segunda inicia la API. Abre http://127.0.0.1:8000/docs, despliega POST /ask, pulsa Try it out, introduce el JSON del ejemplo y pulsa Execute. Deja la terminal abierta; Ctrl+C detiene el servidor.')
 p('Ollama debe estar activo. Si su aplicación no está abierta, ejecuta ollama serve en otra terminal. Para la preparación inicial, con Python 3.12, Ollama y el entorno virtual ya disponibles, el README indica:')
-code('python -m pip install -e ".[dev]"\nollama pull embeddinggemma:latest\nollama pull gemma3:4b\nturismo-rag index\nturismo-rag serve')
+code('python -m pip install -e ".[dev]"\nollama pull embeddinggemma:latest\nollama pull gemma3:1b\nturismo-rag index\nturismo-rag serve')
 p('Si todavía no existe .venv, puedes crearlo con py -3.12 -m venv .venv y luego activarlo. La descarga inicial de dependencias y modelos requiere internet. Las consultas usan los recursos de tu equipo.')
 p('También puedes preguntar desde la terminal sin arrancar la API:')
 code('turismo-rag ask "¿Qué puedo visitar en la Albufera?"')

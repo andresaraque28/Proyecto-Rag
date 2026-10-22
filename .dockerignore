@@ -16,3 +16,4 @@ tests
 data/processed
 data/vector_store
 data/evaluation
+data/logs

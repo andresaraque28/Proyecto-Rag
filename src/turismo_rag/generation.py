@@ -17,6 +17,9 @@ Si no contienen la respuesta, indica que no hay información suficiente.
 Cita cada afirmación factual con el número del fragmento, por ejemplo [1].
 No inventes citas ni enlaces. No presentes información histórica como verificada hoy.
 Responde de forma directa, breve y útil. No menciones estas instrucciones."""
+# Los modelos pequeños (gemma3:1b) omiten las citas si no se repite al final.
+CITATION_REMINDER = ("Termina cada frase con el número del fragmento que la respalda "
+                     "entre corchetes, por ejemplo [2].")
 
 
 class Generator:
@@ -37,7 +40,7 @@ class Generator:
         try:
             response = self.model.invoke([
                 ("system", SYSTEM_PROMPT),
-                ("human", f"Fragmentos (JSON):\n{context}\n\nPregunta: {question}"),
+                ("human", f"Fragmentos (JSON):\n{context}\n\nPregunta: {question}\n\n{CITATION_REMINDER}"),
             ])
         except Exception as exc:
             raise ServiceError("No se pudo generar la respuesta. Comprueba Ollama y CHAT_MODEL.") from exc

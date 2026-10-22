@@ -3,7 +3,7 @@
 from pathlib import Path
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         env_file=PROJECT_ROOT / ".env", env_file_encoding="utf-8", extra="ignore"
     )
     ollama_base_url: str = "http://127.0.0.1:11434"
-    chat_model: str = "gemma3:4b"
+    chat_model: str = "gemma3:1b"
     embedding_model: str = "embeddinggemma:latest"
     chroma_dir: Path = DATA_DIR / "vector_store"
     collection_name: str = "valencia_tourism"
@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     top_k: int = Field(default=5, ge=1, le=10)
     request_timeout: float = Field(default=180, gt=0)
     max_distance: float | None = Field(default=None, ge=0, le=2)
+    # Juez de alucinación; sin valor usa chat_model, que ya está cargado.
+    judge_model: str | None = None
+    # Juzga cada /ask en segundo plano; duplica el uso de CPU por consulta.
+    judge_requests: bool = False
+    # Eventos, errores y evaluaciones en JSON por línea; rota a los 5 MB.
+    log_file: Path | None = DATA_DIR / "logs" / "app.log"
+
+    @field_validator("log_file", mode="before")
+    @classmethod
+    def empty_log_file_disables(cls, value):
+        # LOG_FILE= en .env o en el entorno desactiva el archivo.
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 @lru_cache
